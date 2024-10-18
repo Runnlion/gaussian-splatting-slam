@@ -1,0 +1,8 @@
+prefix=/home/wolftech/lxiang3.lab/Desktop/sdu6/gaussian-splatting-slam/submodules/ros_workspace/devel/.private/gs_slam_msgs
+
+Name: gs_slam_msgs
+Description: Description of gs_slam_msgs
+Version: 0.0.0
+Cflags: -I/home/wolftech/lxiang3.lab/Desktop/sdu6/gaussian-splatting-slam/submodules/ros_workspace/devel/.private/gs_slam_msgs/include
+Libs: -L${prefix}/lib 
+Requires: 

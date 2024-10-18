@@ -175,6 +175,7 @@ def read_intrinsics_text(path):
                 cameras[camera_id] = Camera(id=camera_id, model=model,
                                             width=width, height=height,
                                             params=params)
+    # print(len(cameras))
     return cameras
 
 def read_extrinsics_binary(path_to_model_file):
@@ -268,7 +269,7 @@ def read_extrinsics_text(path):
                     camera_id=camera_id, name=image_name,
                     xys=xys, point3D_ids=point3D_ids)
     return images
-
+# 21 0.08069591692172969 0.017455718476460175 0.9323084746550627 -0.35211415048387745 -0.41653705668269647 -0.2520799319223638 1.7736573232018988 21 0021.jpg
 
 def read_colmap_bin_array(path):
     """

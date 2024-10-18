@@ -1,0 +1,4 @@
+sensor_msgs/Image Image
+sensor_msgs/CameraInfo CameraInfo
+geometry_msgs/TransformStamped CameraPose
+sensor_msgs/PointCloud2 Local_Map

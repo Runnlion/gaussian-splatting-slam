@@ -1,0 +1,1 @@
+/home/wolftech/lxiang3.lab/Desktop/sdu6/gaussian-splatting-slam/submodules/ros_workspace/devel/.private/gs_slam_msgs/share/roseus/ros/gs_slam_msgs/manifest.l

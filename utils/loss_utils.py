@@ -88,6 +88,7 @@ def ssim(img1, img2, window_size=11, size_average=True):
     Returns:
         Tensor: SSIM得分 (SSIM score)
     """
+    # Image size = [Channel, H, W]
     channel = img1.size(-3)
     window = create_window(window_size, channel)
 

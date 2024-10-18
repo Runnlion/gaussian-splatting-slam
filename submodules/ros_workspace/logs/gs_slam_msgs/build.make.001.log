@@ -1,0 +1,28 @@
+[  0%] Built target geometry_msgs_generate_messages_py
+[  0%] Built target sensor_msgs_generate_messages_py
+[  0%] Built target sensor_msgs_generate_messages_cpp
+[  0%] Built target std_msgs_generate_messages_eus
+[  0%] Built target sensor_msgs_generate_messages_eus
+[  0%] Built target geometry_msgs_generate_messages_eus
+[  0%] Built target geometry_msgs_generate_messages_cpp
+[  0%] Built target geometry_msgs_generate_messages_lisp
+[  0%] Built target std_msgs_generate_messages_py
+[  0%] Built target sensor_msgs_generate_messages_lisp
+[  0%] Built target std_msgs_generate_messages_nodejs
+[  0%] Built target std_msgs_generate_messages_cpp
+[  0%] Built target sensor_msgs_generate_messages_nodejs
+[  0%] Built target geometry_msgs_generate_messages_nodejs
+[  0%] Built target std_msgs_generate_messages_lisp
+[  0%] Built target _gs_slam_msgs_generate_messages_check_deps_visual_merged_msg
+[ 14%] [34m[1mGenerating Python from MSG gs_slam_msgs/visual_merged_msg[0m
+[ 28%] [34m[1mGenerating C++ code from gs_slam_msgs/visual_merged_msg.msg[0m
+[ 57%] [34m[1mGenerating Lisp code from gs_slam_msgs/visual_merged_msg.msg[0m
+[ 57%] [34m[1mGenerating EusLisp code from gs_slam_msgs/visual_merged_msg.msg[0m
+[ 71%] [34m[1mGenerating Javascript code from gs_slam_msgs/visual_merged_msg.msg[0m
+[ 71%] Built target gs_slam_msgs_generate_messages_lisp
+[ 71%] Built target gs_slam_msgs_generate_messages_nodejs
+[ 71%] Built target gs_slam_msgs_generate_messages_cpp
+[ 85%] Built target gs_slam_msgs_generate_messages_eus
+[100%] [34m[1mGenerating Python msg __init__.py for gs_slam_msgs[0m
+[100%] Built target gs_slam_msgs_generate_messages_py
+[100%] Built target gs_slam_msgs_generate_messages
