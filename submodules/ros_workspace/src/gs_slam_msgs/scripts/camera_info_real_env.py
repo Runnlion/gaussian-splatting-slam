@@ -1,5 +1,5 @@
 import rospy, tf_conversions
-from geometry_msgs.msg import PointStamped, QuaternionStamped, Quaternion
+from geometry_msgs.msg import PointStamped, QuaternionStamped, Quaternion, PoseStamped
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2, Imu
 
 from scipy.spatial.transform import Rotation as R
@@ -25,6 +25,7 @@ class CameraPosefuser():
         rospy.Subscriber(self.imu_topic, Imu, self.imu_callback)
         rospy.loginfo(f"Start listening {self.gps_topic}.")
         rospy.loginfo(f"Start listening {self.imu_topic}.")
+        self.pose_pub = rospy.Publisher('/Camera_Pose', PoseStamped, queue_size=1)
         # Subscriber for CameraInfo
         self.image_info_sub = rospy.Subscriber(
             'camera/rgb/camera_info',
@@ -66,6 +67,11 @@ class CameraPosefuser():
                 # self.visual_merged_msg.CameraPose = tf
                 # self.visual_merged_msg.Image = img
                 # self.visual_merged_pub.publish(self.visual_merged_msg)
+                ps = PoseStamped()
+                ps.header = imu.header
+                ps.pose.position = point.point
+                ps.pose.orientation = imu.quaternion
+                self.pose_pub.publish(ps)
                 break  # Proceed to next imu
             # If the frist tf is not latest, clear all.
         self.imu_cache.clear()
