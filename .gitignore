@@ -8,3 +8,6 @@ tensorboard_3d
 screenshots
 point_cloud
 rosbag
+**devel**
+**logs**
+**.catkin_tools**
