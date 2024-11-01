@@ -73,6 +73,7 @@ class CameraPosefuser():
     def pair_image_Pose(self, img_msg:Image)->bool:
         if(len(self.pc2_cache)==0):
             rospy.loginfo("No Pointcloud Received.")
+            return False
         current_time = img_msg.header.stamp
         self.camera_pose_cache = [
             pose for pose in self.camera_pose_cache
@@ -172,11 +173,6 @@ class CameraPosefuser():
                 transformed_euler_xyz[1],
                 transformed_euler_xyz[2]))
         self.imu_cache.append(self.curr_quaternion)
-        # self.diff_stored.append(diff)
-        # self.previous = transformed_euler_xyz
-        # rospy.logdebug_throttle(1,"Receiving IMU data")
-        # print(len(self.imu_cache))
-        # print(f"rad = {transformed_euler_xyz}")
         self.quaternion_pub.publish(self.curr_quaternion.quaternion)
 
         if(len(self.imu_cache) > 100):
