@@ -156,6 +156,10 @@ include_directories(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/camera_info_publisher.py
+  scripts/gps_pub.py
+  scripts/camera_info_real_env.py
+  scripts/pointcloud_aligner.py
+  scripts/camera_info_real_env_optimized.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
