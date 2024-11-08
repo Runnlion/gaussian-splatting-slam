@@ -46,6 +46,7 @@ class SceneInfo(NamedTuple):
     test_cameras: list
     nerf_normalization: dict
     ply_path: str
+    is_nerf_synthetic: bool
 
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
@@ -183,10 +184,11 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
                            nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
+                           ply_path=ply_path,
+                           is_nerf_synthetic=False)
     return scene_info
 
-def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
+def readCamerasFromTransforms(path, transformsfile, depths_folder, white_background, is_test, extension=".png"):
     cam_infos = []
 
     with open(os.path.join(path, transformsfile)) as json_file:
@@ -223,16 +225,23 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             FovY = fovy 
             FovX = fovx
 
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                            image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
+            depth_path = os.path.join(depths_folder, f"{image_name}.png") if depths_folder != "" else ""
+
+            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX,
+                            image_path=image_path, image_name=image_name,
+                            width=image.size[0], height=image.size[1], depth_path=depth_path, depth_params=None, is_test=is_test))
+            # cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
+            #                 image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
             
     return cam_infos
 
-def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
+def readNerfSyntheticInfo(path, white_background, depths, eval, extension=".png"):
+
+    depths_folder=os.path.join(path, depths) if depths != "" else ""
     print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
+    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", depths_folder, white_background, False, extension)
     print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
+    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", depths_folder, white_background, True, extension)
     
     if not eval:
         train_cam_infos.extend(test_cam_infos)
@@ -261,7 +270,181 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
                            nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
+                           ply_path=ply_path,
+                           is_nerf_synthetic=True)
+    return scene_info
+
+######### ROS Part Implementation #######
+def imgmsg_to_pli(msg, filename, path):
+    try:
+        # Extract image properties
+        width = msg.width
+        height = msg.height
+        encoding = msg.encoding  # e.g., 'rgb8', 'bgr8', 'mono8'
+        is_bigendian = msg.is_bigendian
+        step = msg.step
+
+        # Convert raw data to NumPy array
+        data = np.frombuffer(msg.data, dtype=np.uint8)
+
+        # Handle different encodings
+        if encoding == 'rgb8':
+            image = data.reshape((height, width, 3))
+        elif encoding == 'bgr8':
+            image = data.reshape((height, width, 3))[:, :, ::-1]  # Convert BGR to RGB
+        elif encoding == 'mono8':
+            image = data.reshape((height, width))
+        else:
+            rospy.logerr(f"Unsupported encoding: {encoding}")
+            return
+
+        # Convert NumPy array to PIL Image
+        pil_image = PILImage.fromarray(image)
+        # Save the image as JPEG
+        pil_image.save(path+filename)
+        rospy.loginfo(f"Image saved as {path+filename}")
+
+    except Exception as e:
+        rospy.logerr(f"Failed to process image: {e}")
+        return PILImage
+
+def initCameraIntrinsics(rosmsg_list):
+    cameras = {}
+    # for msg in rosmsg_list:
+    #     camera_info = msg.CameraInfo
+    #     K = camera_info.K
+    #     camera_id = 1
+    #     fx, fy, cx, cy = K[0], K[4], K[2], K[5]
+    #     cameras[camera_id] = Camera(id=camera_id, model="PINHOLE",
+    #                                 width=camera_info.width, height=camera_info.height,
+    #                                 params= np.array([fx, fy, cx, cy]))
+        
+    cameras[1] = Camera(id=1, model="PINHOLE",
+                        width=640, height=480,
+                        params= np.array([615.6607, 615.7676, 329.5684, 241.671]))
+    print(cameras)
+    return cameras
+
+def initCameraExtrinsics(rosmsg_list):
+    images = {}
+    # if (not rospy.has_param('images_idx')):
+    rospy.set_param('images_idx',0)
+    for msg in rosmsg_list:
+        pose = msg.CameraPose
+        image_index = rospy.get_param('images_idx',default=0)
+        q = pose.transform.rotation
+        t = pose.transform.translation
+        qvec = np.array([q.w, q.x, q.y, q.z])
+        tvec = np.array([t.x, t.y, t.z])
+        camera_id = 1
+        image_name = str(image_index) + ".jpg"
+        xys = -1
+        point3D_ids = -1
+        images[image_index] = Image(
+            image_index,qvec,tvec,camera_id,image_name,xys,point3D_ids)
+        rospy.set_param('images_idx',image_index+1)
+    print(images)
+    return images
+
+def initSceneInfo(cam_extrinsics, cam_intrinsics, rosmsg_list, path, model_path, eval, llffhold=8):
+    bridge = CvBridge()
+    cam_infos = []
+    output_folder = model_path + "/sparse/0/"
+    images_folder = model_path + "/ros_images/"
+    os.makedirs(images_folder ,exist_ok = True)
+    os.makedirs(output_folder ,exist_ok = True)
+    print(f"output_folder = {output_folder}")
+
+    for idx, key in enumerate(cam_extrinsics):  
+        img_msg = rosmsg_list[idx].Image
+        extr = cam_extrinsics[key] # Get the correct camera ID
+        intr = cam_intrinsics[extr.camera_id]  # Get the correct Camera ID and Pose 
+        height = intr.height
+        width = intr.width
+        uid = intr.id
+        R = np.transpose(qvec2rotmat(extr.qvec))
+        T = np.array(extr.tvec)
+
+        if intr.model=="SIMPLE_PINHOLE":
+            focal_length_x = intr.params[0]
+            FovY = focal2fov(focal_length_x, height)
+            FovX = focal2fov(focal_length_x, width)
+        elif intr.model=="PINHOLE":
+            focal_length_x = intr.params[0]
+            focal_length_y = intr.params[1]
+            FovY = focal2fov(focal_length_y, height)
+            FovX = focal2fov(focal_length_x, width)
+        else:
+            assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
+        
+        # Save the image first
+        
+        # cv_image = bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
+        # cv2.imwrite('output_image.jpg', cv_image)
+        image_path = os.path.join(images_folder, os.path.basename(extr.name))
+        image_name = os.path.basename(image_path).split(".")[0]
+        imgmsg_to_pli(img_msg, extr.name, images_folder)
+
+        image = PILImage.open(image_path)
+
+        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
+                              image_path=image_path, image_name=image_name, width=width, height=height)
+        cam_infos.append(cam_info)
+
+    if eval:
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+    else:
+        train_cam_infos = cam_infos
+        test_cam_infos = []
+    ply_path = output_folder + "points3D.ply"
+
+    xyz = np.array([])
+    shs = np.array([])
+    print("[Info] RAIN-GS Method Selected.")
+    num_pts = 100
+    cam_pos = []
+    for k in cam_extrinsics.keys():
+        cam_pos.append(cam_extrinsics[k].tvec)
+    cam_pos = np.array(cam_pos)
+    min_cam_pos = np.min(cam_pos)
+    max_cam_pos = np.max(cam_pos)
+    mean_cam_pos = (min_cam_pos + max_cam_pos) / 2.0
+    cube_mean = (max_cam_pos - min_cam_pos) * 1.5
+    # Method 1 to intialization
+    # This initialize the pointcloud using random points according to nerf normalization.
+        # print("[Info] Select Random number initialization.")
+        # xyz = np.random.random((num_pts, 3)) * nerf_normalization["radius"] * 3 - nerf_normalization["radius"] * 1.5
+        # xyz = xyz + nerf_normalization["translate"]
+        # print(f"Generating random point cloud ({num_pts})...")
+
+    # Method 2 to intialization
+    # If we get the training data from reconstructed point cloud, and use more more sparse pointcloud, starts here.
+    xyz = np.random.random((num_pts, 3)) * (max_cam_pos - min_cam_pos) * 3 - (cube_mean - mean_cam_pos)
+    print(f"[Info] Generating OUR point cloud ({num_pts})...")
+    shs = np.random.random((num_pts, 3)) # Color
+    pcd = BasicPointCloud(points=xyz, colors=shs, normals=np.zeros((num_pts, 3)))
+    print(f"[INFO] 1st/2nd xyz: {xyz[0]},{xyz[1]}.")
+    print(f"[INFO] 1st/2nd color: {shs[0]},{shs[1]}.")
+
+    # Store the random color and points here.
+    storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    print("[INFO] Save the random PLY pointcloud. The following reading pointcloud will be random!")
+    
+    try:
+        print(f"[DEBUG] point_cloud = {ply_path}")
+        pcd = fetchPly(ply_path)
+    except:
+        print("[DEBUG] point_cloud = None")
+        pcd = None
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+    scene_info = SceneInfo(point_cloud=pcd,
+                           train_cameras=train_cam_infos,
+                           test_cameras=test_cam_infos,
+                           nerf_normalization=nerf_normalization,
+                           ply_path=ply_path,
+                           is_nerf_synthetic=True)
     return scene_info
 
 ######### ROS Part Implementation #######

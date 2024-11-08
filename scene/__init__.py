@@ -45,39 +45,11 @@ class Scene:
         self.train_cameras = {}
         self.test_cameras = {}
 
-        if(not self.live):
-            if os.path.exists(os.path.join(args.source_path, "sparse")):
-                self.scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
-            elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
-                print("Found transforms_train.json file, assuming Blender data set!")
-                self.scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
-            else:
-                assert False, "Could not recognize scene type!"
-        else:
-            self.scene_info = SceneInfo(point_cloud=BasicPointCloud(np.array([]),np.array([]),np.array([])),
-                                   train_cameras=[],
-                                   test_cameras=[],
-                                   nerf_normalization={},
-                                   ply_path='')
-            return
-        # print(self.scene_info)
-        self.write_scene_ply_camera()
-        self.shuffle_Camera(shuffle=shuffle)
-        self.cameras_extent = self.scene_info.nerf_normalization["radius"]
-        self.resoultion_scale(resolution_scales=resolution_scales, args=args)
-        self.load_init_pointcloud()
-
-        # print(self.train_cameras)
-
-
-
-
-    def load_init_pointcloud(self):
-        if self.loaded_iter:
-            self.gaussians.load_ply(os.path.join(self.model_path,
-                                                           "point_cloud",
-                                                           "iteration_" + str(self.loaded_iter),
-                                                           "point_cloud.ply"))
+        if os.path.exists(os.path.join(args.source_path, "sparse")):
+            scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.depths, args.eval, args.train_test_exp)
+        elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
+            print("Found transforms_train.json file, assuming Blender data set!")
+            scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.depths, args.eval)
         else:
             self.gaussians.create_from_pcd(self.scene_info.point_cloud, self.cameras_extent)
 
@@ -108,6 +80,26 @@ class Scene:
                 json_cams.append(camera_to_JSON(id, cam))
             with open(os.path.join(self.model_path, "cameras.json"), 'w') as file:
                 json.dump(json_cams, file)
+
+        if shuffle:
+            random.shuffle(scene_info.train_cameras)  # Multi-res consistent random shuffling
+            random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
+
+        self.cameras_extent = scene_info.nerf_normalization["radius"]
+
+        for resolution_scale in resolution_scales:
+            print("Loading Training Cameras")
+            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args, scene_info.is_nerf_synthetic, False)
+            print("Loading Test Cameras")
+            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, scene_info.is_nerf_synthetic, True)
+
+        if self.loaded_iter:
+            self.gaussians.load_ply(os.path.join(self.model_path,
+                                                           "point_cloud",
+                                                           "iteration_" + str(self.loaded_iter),
+                                                           "point_cloud.ply"), args.train_test_exp)
+        else:
+            self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
