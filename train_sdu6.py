@@ -25,6 +25,8 @@ from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from gs_slam_msgs.msg import visual_merged_msg
+import numpy as np
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -53,7 +55,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     #    [-0.8632142 ,  0.10027167,  0.49477958]]), 
     merged_msg_cache:list[visual_merged_msg] = list()
     if(dataset.live):
-        while(len(merged_msg_cache)< 200 and not rospy.is_shutdown()):
+        while(len(merged_msg_cache)< 500 and not rospy.is_shutdown()):
             try:
                 merged_msg:visual_merged_msg = rospy.wait_for_message(topic="/Visual_Merged",topic_type=visual_merged_msg, timeout=0.2)
                 rospy.loginfo(merged_msg.CameraPose.transform.translation.x)
@@ -117,9 +119,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if iteration % 1000 == 0:
             gaussians.oneupSHdegree()
 
+
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
+        # print(viewpoint_stack)
+        # print(type(viewpoint_stack))
         # IMPORTANT: Pop One Camera to train.
         viewpoint_cam:cameras.Camera = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         print(f"Iteration = {iteration}, viewpoint_stack size ={len(viewpoint_stack)}, picked camera ID: {viewpoint_cam.uid}, GS-Pts={gaussians._xyz.size()}")
@@ -129,6 +134,27 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pipe.debug = True
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
+        
+
+        # Use RAIN GS method
+        # Coarse-to-fine
+        # c2f = True
+        # c2f_every_step = 500
+        # c2f_max_lowpass = 300
+        # if c2f == True:
+        #     # c2f_every_step default = 500
+        #     # OptimizationParams -> opt
+        #     #  opt.densify_until_iter default value is 15_000 (15000)
+        #     if iteration == 1 or (iteration % c2f_every_step == 0 and iteration < opt.densify_until_iter) :
+        #         H = viewpoint_cam.image_height
+        #         W = viewpoint_cam.image_width
+        #         N = gaussians.get_xyz.shape[0]
+        #         low_pass = max (H * W / N / (9 * np.pi), 0.3) #0.3 is the minimum value of lowpass filter value
+        #         if c2f_max_lowpass > 0:
+        #             low_pass = min(low_pass, c2f_max_lowpass)
+        #         print(f"[ITER {iteration}] Low pass filter : {low_pass}")
+        # else:
+        #     low_pass = 0.3
 
         # gaussian_renderer, in this part, we use the package we just built from cuda files.
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)

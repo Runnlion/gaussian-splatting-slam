@@ -26,6 +26,7 @@ class CameraPosefuser():
         rospy.loginfo(f"Start listening {self.gps_topic}.")
         rospy.loginfo(f"Start listening {self.imu_topic}.")
         self.pose_pub = rospy.Publisher('/Camera_Pose', PoseStamped, queue_size=1)
+        
         # Subscriber for CameraInfo
         self.image_info_sub = rospy.Subscriber(
             'camera/rgb/camera_info',
@@ -38,6 +39,12 @@ class CameraPosefuser():
             '/camera/rgb/image_color',
             Image,
             self.image_listener,
+            queue_size=10
+        )
+        self.pointcloud_sub = rospy.Subscriber(
+            '/camera/depth/points',
+            PointCloud2,
+            self.pointcloud_callback,
             queue_size=10
         )
 

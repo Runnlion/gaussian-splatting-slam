@@ -3,7 +3,7 @@
 import ctypes
 import rospy, rosbag
 from gs_slam_msgs.msg import visual_merged_msg  # Replace with your message type
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Quaternion
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from PIL import Image as pilImage
 import matplotlib.pyplot as plt
@@ -18,10 +18,11 @@ from scipy.spatial.transform import Rotation as R
 
 pc2_pub = rospy.Publisher("/pointcloud", PointCloud2,queue_size=1)
 
+MOVING_FORWARD = 0x00
+MOVING_BACKWARD = 0x01
 class visual_message_extractor():
     def __init__(self):
         self.vm_topic = '/Visual_Merged'
-
 def process_and_save_image(msg, timestamp, output_dir, img_name):
     try:
         # msg:Image = msg.Image 
@@ -60,11 +61,10 @@ def process_and_save_image(msg, timestamp, output_dir, img_name):
         # Save image
         img_path = os.path.join(output_dir, img_name)
         image.save(img_path)
-        print(f"Saved image {img_name}")
+        # print(f"Saved image {img_name}")
 
     except Exception as e:
         print(f"Could not process image at time {timestamp}: {e}")
-
 def extract_camera_info(msg, camera_info_path):
     try:
         CAMERA_ID = 1  # Assuming a single camera with ID 1
@@ -112,7 +112,7 @@ def extract_camera_pose_image(msg_list, poses_path, images_output_dir, max_worke
                     poses_file.write(f"{scale_index} {qw} {qx} {qy} {qz} {tx} {ty} {tz} {CAMERA_ID} {img_name}\n\n")
                     scale_index += 1
 
-def process_pointcloud(pc, initial_heading_degree, translation, pointcloud_path, distance_threshold=8.0):
+def process_pointcloud(pc, xyz_offset, quaternion_realsense, distance_threshold=10.0):
     """
     Processes a PointCloud2 message by transforming coordinates, filtering by distance,
     rotating around the z-axis, downsampling, and saving the point cloud with normals.
@@ -124,66 +124,129 @@ def process_pointcloud(pc, initial_heading_degree, translation, pointcloud_path,
         distance_threshold: The maximum allowed Euclidean distance for points (default is 8.0 meters).
     """
     field_names = ('x', 'y', 'z', 'rgb')  # Fields to extract
-
     # Use pc2.read_points to read the point cloud data
     points_gen = pc2.read_points(pc, field_names=field_names, skip_nans=True)
     points = list(points_gen)  # Convert generator to list if needed
+    rotation_mtx = np.eye(4)
+    rotation_mtx[:3,:3] = R.from_quat(np.array([
+                                        quaternion_realsense.x, 
+                                        quaternion_realsense.y, 
+                                        quaternion_realsense.z, 
+                                        quaternion_realsense.w])).as_matrix()
+    rotation_mtx[:3, 3] = np.array([xyz_offset[0], xyz_offset[1], xyz_offset[2]])
+    # z_component = R.from_quat(np.array([
+    #                                     quaternion_realsense.x, 
+    #                                     quaternion_realsense.y, 
+    #                                     quaternion_realsense.z, 
+    #                                     quaternion_realsense.w])).as_euler('zyx', degrees=True)[0]
     
+    # rotation_mtx = rot(-z_component,'y')
+    print(rotation_mtx)
     transformed_points = []
-    theta = (np.pi - np.deg2rad(initial_heading_degree))  # Negative rotation angle in radians
-    # theta = 0.2
-    # Rotation matrix around z-axis
-    R_z = np.array([
-        [np.cos(theta), -np.sin(theta), 0],
-        [np.sin(theta),  np.cos(theta), 0],
-        [0,              0,             1]
-    ])
-
-    # Frame transformation matrix from Realsense frame to your frame
-    # Realsense Frame: X (right), Y (down), Z (front)
-    # Your Frame:      X (right), Y (front), Z (up)
-    T = np.array([
-        [1,  0,  0],  # X remains the same
-        [0,  0,  1],  # Y becomes Z
-        [0, -1,  0]   # Z becomes -Y
-    ])
 
     for point in points:
         x_rs, y_rs, z_rs, rgb = point  # Realsense frame coordinates
-        if(y_rs<0.1):
+        if(y_rs<-0.1) or (np.linalg.norm([x_rs, y_rs, z_rs]))>distance_threshold:
+            # Discard if distance exceeds threshold
             continue
-        # Discard if distance exceeds threshold
-        distance = np.linalg.norm([x_rs, y_rs, z_rs])
-        if distance > distance_threshold:
-            continue
-        # Convert to numpy array
+        
+        rotated_vec = rotation_mtx@np.array([x_rs, y_rs, z_rs,1])
 
-        xyz_rotated = T @ np.array([x_rs,y_rs,z_rs])
-        xyz_rotated = R_z @ xyz_rotated
-        xyz_transformed = xyz_rotated +  np.array([translation.x, translation.y, translation.z])
-            # Transform to your frame
-        # xyz_custom = np.linalg.inv(T) @ xyz_rs
-            # Rotate around the z-axis
-        # xyz_rotated = R_z @ xyz_rs
-            # Compute Euclidean distance
+        x_rs = rotated_vec[0]
+        y_rs = rotated_vec[1]
+        z_rs = rotated_vec[2]
+        xyz_transformed =  np.array([x_rs,y_rs,z_rs,1])
 
-
-        # Keep the point
         # cast float32 to int so that bitwise operations are possible
-
         s = struct.pack('>f' ,rgb)
         i = struct.unpack('>l',s)[0]
-        # you can get back the float value by the inverse operations
         pack = ctypes.c_uint32(i).value
         r = (pack & 0x00FF0000)>> 16
         g = (pack & 0x0000FF00)>> 8
         b = (pack & 0x000000FF)
-
         transformed_points.append((xyz_transformed[0], xyz_transformed[1], xyz_transformed[2], r, g, b))
-        # transformed_points.append((xyz_rs[0], xyz_rs[1], xyz_rs[2], r, g, b))
-    # print(transformed_points[0])
-    # Save the transformed point cloud with normals and downsampling
-    return save_pointcloud(transformed_points, pointcloud_path)
+
+    # Extract XYZ coordinates and colors
+    xyz = np.array([[p[0], p[1], p[2]] for p in transformed_points])
+    rgb = np.array([[p[3], p[4], p[5]] for p in transformed_points], dtype=np.uint32)
+    rgb = rgb / 255.0  # Normalize to [0, 1]
+
+    # Create Open3D point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz)
+    pcd.colors = o3d.utility.Vector3dVector(rgb)
+    pcd = pcd.voxel_down_sample(voxel_size=0.05)  # Adjust voxel_size as needed
+
+    # Estimate normals
+    pcd.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
+    )
+
+    return pcd
+
+def pointcloud_registeration(source, target):
+    voxel_size = 0.05  # Adjust voxel size as needed
+    source_down = source.voxel_down_sample(voxel_size)
+    target_down = target.voxel_down_sample(voxel_size)
+
+    # Estimate normals
+    source_down.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2, max_nn=30))
+    target_down.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2, max_nn=30))
+
+    # Compute FPFH features
+    # source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+    #     source_down,
+    #     o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 5, max_nn=100))
+    # target_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+    #     target_down,
+    #     o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 5, max_nn=100))
+
+    # RANSAC registration
+    # distance_threshold = voxel_size * 1.5
+    # result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+    #     source_down, target_down, source_fpfh, target_fpfh, True, distance_threshold,
+    #     o3d.pipelines.registration.TransformationEstimationPointToPoint(False), 4, [
+    #         o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+    #         o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold)
+    #     ], o3d.pipelines.registration.RANSACConvergenceCriteria(4000000, 500))
+
+    # # Apply the transformation to the original source point cloud
+    # source.transform(result_ransac.transformation)
+
+    # Visualize the alignment
+    # o3d.visualization.draw_geometries([source, target])
+    threshold = 0.5  # Adjust based on your data
+    # result_icp = o3d.pipelines.registration.registration_icp(
+    #     source, target, threshold, result_ransac.transformation,
+    #     o3d.pipelines.registration.TransformationEstimationPointToPoint())
+    
+    # 设置初始变换矩阵为单位矩阵
+    initial_transformation = np.identity(4)
+
+    # 使用 ICP 进行配准
+    threshold = 0.5  # 根据您的数据调整
+    result_icp = o3d.pipelines.registration.registration_icp(
+        source_down, target_down, threshold, initial_transformation,
+        o3d.pipelines.registration.TransformationEstimationPointToPoint())
+
+    # Apply the transformation
+    source.transform(result_icp.transformation)
+    print(f"result_icp.transformation = \n{result_icp.transformation}")
+
+    # Visualize the refined alignment
+    o3d.visualization.draw_geometries([source, target])
+
+    # 合并配准后的源点云和目标点云
+    merged_pcd = source + target
+
+    # （可选）对合并后的点云进行下采样或去除重复点
+    merged_pcd = merged_pcd.voxel_down_sample(voxel_size)
+    merged_pcd.remove_duplicated_points()
+
+    # 返回合并后的点云
+    return merged_pcd
 
 def read_pointcloud(cloud, field_names=None, skip_nans=False):
     '''Read points from a PointCloud2 message, including RGB color.
@@ -262,64 +325,33 @@ def read_pointcloud(cloud, field_names=None, skip_nans=False):
                 continue
             yield point
 
-def save_pointcloud(points, pointcloud_path):
+def save_pointcloud(pcd, pointcloud_path, name):
     '''Save the transformed points with normals to a PLY file using Open3D.
 
     Parameters:
         points: List of tuples containing (x, y, z, rgb).
         pointcloud_path: File path to save the point cloud (should end with .ply).
     '''
-
+    pointcloud_path = pointcloud_path + name
     # Extract XYZ coordinates and colors
-    xyz = np.array([[p[0], p[1], p[2]] for p in points])
-    rgb = np.array([[p[3], p[4], p[5]] for p in points], dtype=np.uint32)
+    # xyz = np.array([[p[0], p[1], p[2]] for p in points])
+    # rgb = np.array([[p[3], p[4], p[5]] for p in points], dtype=np.uint32)
 
-    rgb = rgb / 255.0  # Normalize to [0, 1]
+    # rgb = rgb / 255.0  # Normalize to [0, 1]
 
     # Create Open3D point cloud
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(xyz)
-    pcd.colors = o3d.utility.Vector3dVector(rgb)
+    # pcd = o3d.geometry.PointCloud()
+    # pcd.points = o3d.utility.Vector3dVector(xyz)
+    # pcd.colors = o3d.utility.Vector3dVector(rgb)
 
     # Estimate normals
     pcd.estimate_normals(
         search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
     )
-
     pcd = pcd.voxel_down_sample(voxel_size=0.05)  # Adjust voxel_size as needed
-    
-    print(pcd.points[0])
-    print(pcd.colors[0])
-    print(pcd.normals[0])
-    # Optionally, you can re-orient the normals if needed
-    # pcd.orient_normals_consistent_tangent_plane(k=10)
-    # with open(pointcloud_path, 'w') as f:
-    #     # Write PLY header
-    #     f.write("ply\n")
-    #     f.write("format ascii 1.0\n")
-    #     f.write(f"element vertex {num_points}\n")
-    #     f.write("property float x\n")
-    #     f.write("property float y\n")
-    #     f.write("property float z\n")
-    #     f.write("property float nx\n")
-    #     f.write("property float ny\n")
-    #     f.write("property float nz\n")
-    #     f.write("property uchar red\n")
-    #     f.write("property uchar green\n")
-    #     f.write("property uchar blue\n")
-    #     f.write("end_header\n")
-    #     # Write point data with black color (0,0,0)
-    #     for point in points:
-    #         f.write(f"{point[0]} {point[1]} {point[2]} 0 0 1 1 1 1\n")
-    #     print(f"Saved point cloud to {pointcloud_path}")
-    # except Exception as e:
-    #     print(f"Could not extract point cloud: {e}")
-
     
     # Save the point cloud in PLY format
     o3d.io.write_point_cloud(pointcloud_path, pcd, write_ascii=True)
-    o3d.io.write_point_cloud(pointcloud_path + "_.pcd", pcd, write_ascii=False)
-
     print(f"Point cloud saved to {pointcloud_path} with {len(pcd.points)} points.")
     return pcd
 
@@ -354,10 +386,77 @@ def visualize(pointcloud,xyz_np, rgb_np, intrinsic, extrinsics):
     opt.background_color = np.asarray([0.5, 0.5, 0.5])
     viewer.run()
     viewer.destroy_window()
+
+    return pointcloud
     # o3d.visualization.draw_geometries([pointcloud])
 
+def pointcloud_registration_gpu(source, target):
+    # 转换为 Open3D Tensor 点云
+    device = o3d.core.Device("CUDA:0")
+
+    source_t = o3d.t.geometry.PointCloud.from_legacy(source, device=device)
+    target_t = o3d.t.geometry.PointCloud.from_legacy(target, device=device)
+
+    # 体素下采样
+    voxel_size = 0.05
+    source_down = source_t.voxel_down_sample(voxel_size)
+    target_down = target_t.voxel_down_sample(voxel_size)
+
+    # 估计法线
+    source_down.estimate_normals(radius=voxel_size * 2, max_nn=30)
+    target_down.estimate_normals(radius=voxel_size * 2, max_nn=30)
+
+    # 设置初始变换
+    init_trans = o3d.core.Tensor.eye(4, o3d.core.Dtype.Float32, device)
+
+    # 执行 GPU 加速的 ICP
+    max_correspondence_distance = voxel_size * 5.0
+    criteria = o3d.t.pipelines.registration.ICPConvergenceCriteria(relative_fitness=1e-6,
+                                                                   relative_rmse=1e-6,
+                                                                   max_iteration=50)
+
+    result_icp = o3d.t.pipelines.registration.icp(
+        source_down, target_down, max_correspondence_distance, init_trans,
+        estimation_method=o3d.t.pipelines.registration.TransformationEstimationPointToPoint(),
+        criteria=criteria)
+
+    # 将变换应用于源点云
+    source_t.transform(result_icp.transformation)
+
+    # 转换回经典点云以进行可视化或保存
+    source_transformed = source_t.to_legacy()
+
+    # 合并点云
+    merged_pcd = source_transformed + target
+
+    return merged_pcd
+
+
+def rot(degree, axis='x'):
+    rad = np.deg2rad(degree)
+    if axis == 'x':
+        return np.array([
+            [1, 0, 0,0],
+            [0, np.cos(rad), -np.sin(rad),0],
+            [0, np.sin(rad), np.cos(rad),0],
+            [0,0,0,1]])
+    elif axis == 'y':
+        return np.array([
+            [np.cos(rad), 0, np.sin(rad),0],
+            [0, 1, 0, 0 ],
+            [-np.sin(rad), 0, np.cos(rad),0],
+            [0,0,0,1]
+            ])
+    elif axis == 'z':
+        return np.array([
+        [np.cos(rad), -np.sin(rad), 0,0],
+        [np.sin(rad), np.cos(rad), 0,0],
+        [0, 0, 1,0],
+        [0,0,0,1]
+        ])
     
 def main(bag_file, output_dir, max_workers):
+    moving_direction = MOVING_FORWARD
     rospy.init_node("node_pc_pub")
     sparse0_dir = os.path.join(output_dir, 'sparse/0/')
     # sparse0_dir = os.path.join(sparse_dir, '0')
@@ -370,18 +469,23 @@ def main(bag_file, output_dir, max_workers):
     images_output_dir = os.path.join(output_dir, 'images')
     if not os.path.exists(images_output_dir):
         os.makedirs(images_output_dir)
+    
     camera_pose_image = []
-    camera_info = None
-    translation = None
+    image_list = []
     x_data, y_data, z_data = [], [], []
     quaternion_list = []
-    has_pointcloud = False
+    iteration_pc = 30 
+    index = 0
+    pc_list = []
+    pointcloud_offset = []
+    pointcloud_rotation = []
     with rosbag.Bag(bag_file, 'r') as bag:
         # Iterate over all messages in the 'Visual_merged' topic        
         for topic, msg, t in bag.read_messages(topics=['/Visual_Merged']):
             # Extract XYZ from CameraPose
             msg:visual_merged_msg = msg
-            camera_pose_image.append((msg.CameraPose, msg.Image))
+            # camera_pose_image.append((msg.CameraPose, msg.Image))
+            image_list.append(msg.Image)
             camera_info = msg.CameraInfo
             x_data.append(msg.CameraPose.transform.translation.x)
             y_data.append(msg.CameraPose.transform.translation.y)
@@ -390,80 +494,144 @@ def main(bag_file, output_dir, max_workers):
             # print(msg.Local_Map.header.stamp)
             # pc2_pub.publish(msg.Local_Map)
             # rospy.Rate(5).sleep()
-            if(not has_pointcloud):
-                pc = msg.Local_Map
-                translation = msg.CameraPose.transform.translation
-                has_pointcloud = True
-                # print(translation)
-    
-    
-    extract_camera_info(msg.CameraInfo, camera_info_path)
-    extract_camera_pose_image(camera_pose_image, poses_path, images_output_dir, max_workers)
-    print (f' ======  Open3D=={o3d.__version__}  ======= ')
+            if(index%iteration_pc == 0):
+                pc_list.append(msg.Local_Map)
+                pointcloud_offset.append([msg.CameraPose.transform.translation.x,
+                                    msg.CameraPose.transform.translation.y,
+                                    msg.CameraPose.transform.translation.z])
+                pointcloud_rotation.append(msg.CameraPose.transform.rotation)
+            index += 1
 
-    delta_x = x_data[-1] - x_data[0]
-    delta_y = y_data[-1] - y_data[0]
+    delta_x = x_data[100] - x_data[0]
+    delta_y = y_data[100] - y_data[0]
     angle_rad = math.atan2(delta_y,delta_x)
     initial_heading_degree = math.degrees(angle_rad)
-    
-    print(f"Start {x_data[0]}, {y_data[0]}")
-    print(f"End {x_data[-1]}, {y_data[-1]}")
-    print(initial_heading_degree)
-    # if(initial_heading_degree < 0):
+    print(f"Init Angle = {initial_heading_degree}")
 
-    pcd = process_pointcloud(pc,initial_heading_degree, translation, pointcloud_path)
-    xyz_np = np.array([])
+    if(moving_direction == MOVING_FORWARD):
+        if(initial_heading_degree < 0 and initial_heading_degree >= -90):
+            initial_heading_degree = 90 - initial_heading_degree
+            assert initial_heading_degree >= 90
+        elif(initial_heading_degree<-90 and initial_heading_degree> -180):
+            initial_heading_degree = -90 + initial_heading_degree
+            assert initial_heading_degree<-180
+        elif(initial_heading_degree>=0 and initial_heading_degree < 90):
+            initial_heading_degree = initial_heading_degree
+            assert initial_heading_degree > 0
+        elif(initial_heading_degree>90 and initial_heading_degree < 180):
+            initial_heading_degree = -(initial_heading_degree - 90)
+            assert initial_heading_degree<0
+
+    # if(initial_heading_degree < -90):
+    #     initial_heading_degree = 90 + initial_heading_degree
+    # elif(initial_heading_degree > 90):
+    #     initial_heading_degree = initial_heading_degree - 90
+    print(f"Init Angle = {initial_heading_degree}")
+    
     xyz_list = []
     rgb_list = []
     for i in range(len(x_data)):
         xyz_list.append([x_data[i], y_data[i],z_data[i]])
         rgb_list.append([1,0,0])
-        # print([x_data[i], y_data[i],z_data[i]])
-        # xyz = np.array([x_data[i], y_data[i],z_data[i]])
-    # xyz_list.append([0,0,0])
-    # rgb_list.append([0,0,1])
-    # Define the quaternion (w, x, y, z) - example for 90-degree rotation around the z-axis
-    T = np.array([
-        [1,  0,  0],  # X remains the same
-        [0,  0,  -1],  # Y becomes Z
-        [0, 1,  0]   # Z becomes -Y
-    ])
+    x_offset = xyz_list[0][0]
+    y_offset = xyz_list[0][1]
+    z_offset = xyz_list[0][2]
 
-    q = quaternion_list[0]
-    quaternion = [q.x, q.y, q.z, q.w]  # w, x, y, z format
+    for i in range(len(pointcloud_offset)):
+        cloud_gps_pt = pointcloud_offset[i]
+        pt_shifted = np.array([cloud_gps_pt[0] - x_offset, cloud_gps_pt[1] - y_offset, cloud_gps_pt[2] - z_offset, 1])
+        pt_rotated_init = rot(initial_heading_degree,'z')@pt_shifted
+        pt_rotated_x = rot(90,'x')@pt_rotated_init
+        pointcloud_offset[i] = [pt_rotated_x[0], pt_rotated_x[1], pt_rotated_x[2]]
+        print(pointcloud_offset[i])
+    # quit()
+    from tqdm import tqdm
+    merged_cloud = process_pointcloud(pc_list[0], pointcloud_offset[0], pointcloud_rotation[0]) #Also Target
+    for i in tqdm(range(len(pc_list)-1)):
+        source = process_pointcloud(pc_list[i+1], pointcloud_offset[i+1], pointcloud_rotation[i+1])
+        merged_cloud = pointcloud_registration_gpu(source ,merged_cloud)
+        save_pointcloud(merged_cloud, sparse0_dir,f"registered_{i}.ply")
+        save_pointcloud(merged_cloud, sparse0_dir,f"registered_{i}.pcd")
+        merged_cloud = merged_cloud + source
+        # if(i%5 == 0):
+        #     o3d.visualization.draw_geometries([merged_cloud])
+    save_pointcloud(merged_cloud, sparse0_dir,f"points3D.ply")
 
-    # Convert the quaternion to a 3x3 rotation matrix
-    rotation_matrix = R.from_quat(quaternion).as_matrix()
-    rotation_matrix = T@rotation_matrix
-    theta = (np.pi/2 + np.deg2rad(initial_heading_degree))  # Negative rotation angle in radians
-    print(theta)
-    # theta = 0.2
-    # Rotation matrix around z-axis
-    R_z = np.array([
-        [np.cos(theta), -np.sin(theta), 0],
-        [np.sin(theta),  np.cos(theta), 0],
-        [0,              0,             1]
-    ])
-    rotation_matrix = R_z@rotation_matrix
 
-    print(rotation_matrix, quaternion)
-    # Initialize a 4x4 extrinsics matrix
-    extrinsics = np.eye(4)
 
-    # Set the top-left 3x3 part of the extrinsics matrix to the rotation matrix
-    extrinsics[:3, :3] = rotation_matrix
-
-    # Optionally set a translation (e.g., place the camera at (1, 0, 0))
-    extrinsics[:3, 3] = [-x_data[0],y_data[0], z_data[0]]  # Example translation
-    print(x_data[0],y_data[0], z_data[0])
     intrinsic = np.array([
         [500, 0, 320],  # fx, 0, cx
         [0, 500, 240],  # 0, fy, cy
         [0, 0, 1]       # 0, 0, 1
     ])
-    visualize(pcd,np.array(xyz_list), np.array(rgb_list),intrinsic,extrinsics)
+
+    extrinsics = np.eye(4)
+    T_x = rot(-90,'x')
+    T_y = rot(-1*(90 - initial_heading_degree),'z')
+    T_y @ T_x
+    # Optionally set a translation (e.g., place the camera at (1, 0, 0))
+    extrinsics[:3, 3] = [x_data[0],y_data[0],z_data[0]]  # Example translation
+    print(extrinsics)
+    q = R.from_matrix(extrinsics[:3, :3]).as_quat()
+
+    extrinsics = np.linalg.inv(extrinsics)
+    T = np.array([
+        [1,  0,  0],
+        [0, -1,  0],
+        [0,  0, -1]
+    ])
+    r = extrinsics[:3, :3]
+    t = extrinsics[:3, 3]
+    rotation = R.from_matrix(r)
+    quaternion = rotation.as_quat()
+
+    # 应用转换
+    R_colmap = T @ r
+    t_colmap = T @ t
+
+    rotation_colmap = R.from_matrix(R_colmap)
+    quaternion_colmap = rotation_colmap.as_quat()
+    qx_colmap, qy_colmap, qz_colmap, qw_colmap = quaternion_colmap
 
 
+    transformed_xyz = []
+    for i in range(len(quaternion_list)):
+        ts = TransformStamped()
+        q:Quaternion = quaternion_list[i]
+        pt_shifted = np.array([xyz_list[i][0] - x_offset, xyz_list[i][1] - y_offset, xyz_list[i][2] - z_offset, 1])
+        pt_rotated_init = rot(initial_heading_degree,'z')@pt_shifted
+        pt_rotated_x = rot(90,'x')@pt_rotated_init
+        print(pt_shifted, pt_rotated_x)
+        transformed_xyz.append([pt_rotated_x[0],pt_rotated_x[1],pt_rotated_x[2]])
+
+
+        extrinsic = np.eye(4)
+        extrinsic[:3,:3] = R.from_quat(np.array([q.x, q.y, q.z, q.w])).as_matrix()
+        extrinsic[:3,3] = np.array([pt_rotated_x[0], pt_rotated_x[1], pt_rotated_x[2]])
+        inv_extrinsic = np.linalg.inv(extrinsic)
+        print(inv_extrinsic)
+        inv_q = R.from_matrix(inv_extrinsic[:3, :3]).as_quat() #xyzw
+        inv_p = inv_extrinsic[:3, 3]
+
+        ts.transform.translation.x = inv_p[0]
+        ts.transform.translation.y = inv_p[1]
+        ts.transform.translation.z = inv_p[2]
+        
+        # Put the data here.
+        ts.transform.rotation.w = inv_q[3]
+        ts.transform.rotation.x = inv_q[0]
+        ts.transform.rotation.y = inv_q[1]
+        ts.transform.rotation.z = inv_q[2]
+
+        camera_pose_image.append((ts,image_list[i]))
+        # print(ts.transform.translation)
+
+
+    extract_camera_info(msg.CameraInfo, camera_info_path)
+    extract_camera_pose_image(camera_pose_image, poses_path, images_output_dir, max_workers)
+    pcd = visualize(merged_cloud,np.array(transformed_xyz), np.array(rgb_list),intrinsic,extrinsics)
+    o3d.io.write_point_cloud(pointcloud_path +"_1.ply", pcd, write_ascii=True)
+    o3d.io.write_point_cloud(pointcloud_path + "_1.pcd", pcd, write_ascii=False)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Extract data from a ROS bag file.")

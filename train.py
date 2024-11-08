@@ -200,16 +200,16 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[3000, 7_000, 10000, 15000, 20000, 25000, 30_000, 40000, 50000, 60000, 70000, 80000, 90000, 100000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 7_000, 10000, 15000, 20000, 25000, 30_000, 40000, 50000, 60000, 70000, 80000, 90000, 100000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[3000, 7000, 30000, 40000, 50000, 60000, 70000, 80000, 90000, 100000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
-    
-    print("Optimizing " + args.model_path)
 
+    # print("Optimizing " + args.model_path)
+    print(f"args.checkpoint_iterations = \n{args.checkpoint_iterations}")
     # Initialize system state (RNG)
     safe_state(args.quiet)
 

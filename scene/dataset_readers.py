@@ -149,7 +149,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     # print(cam_extrinsics)
-    print(cam_extrinsics)
+    # print(cam_extrinsics)
     reading_dir = "images" if images == None else images
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
@@ -300,14 +300,18 @@ def imgmsg_to_pli(msg, filename, path):
 
 def initCameraIntrinsics(rosmsg_list):
     cameras = {}
-    for msg in rosmsg_list:
-        camera_info = msg.CameraInfo
-        K = camera_info.K
-        camera_id = 1
-        fx, fy, cx, cy = K[0], K[4], K[2], K[5]
-        cameras[camera_id] = Camera(id=camera_id, model="PINHOLE",
-                                    width=camera_info.width, height=camera_info.height,
-                                    params= np.array([fx, fy, cx, cy]))
+    # for msg in rosmsg_list:
+    #     camera_info = msg.CameraInfo
+    #     K = camera_info.K
+    #     camera_id = 1
+    #     fx, fy, cx, cy = K[0], K[4], K[2], K[5]
+    #     cameras[camera_id] = Camera(id=camera_id, model="PINHOLE",
+    #                                 width=camera_info.width, height=camera_info.height,
+    #                                 params= np.array([fx, fy, cx, cy]))
+        
+    cameras[1] = Camera(id=1, model="PINHOLE",
+                        width=640, height=480,
+                        params= np.array([615.6607, 615.7676, 329.5684, 241.671]))
     print(cameras)
     return cameras
 

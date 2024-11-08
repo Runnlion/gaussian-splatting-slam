@@ -67,6 +67,8 @@ class Scene:
         self.resoultion_scale(resolution_scales=resolution_scales, args=args)
         self.load_init_pointcloud()
 
+        # print(self.train_cameras)
+
 
 
 
@@ -126,7 +128,10 @@ class Scene:
         camera_extrinsic = initCameraExtrinsics(visual_merged_list) #Only deal with tvec and rvec. no xys and point3did
 
         # In this part, we artifically set the ply file, but actually, this file does not exist. Consider create a random instead.
-        self.scene_info = initSceneInfo(camera_extrinsic,camera_intrinsic,visual_merged_list,dataset.source_path, dataset.model_path, self.eval)
+        self.scene_info = initSceneInfo(camera_extrinsic,camera_intrinsic,visual_merged_list,
+                                        dataset.source_path, 
+                                        dataset.model_path, 
+                                        self.eval)
         # self.write_scene_ply_camera()
         self.shuffle_Camera(shuffle=shuffle)
         self.cameras_extent = self.scene_info.nerf_normalization["radius"]
